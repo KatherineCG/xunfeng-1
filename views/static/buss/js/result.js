@@ -82,6 +82,9 @@ $('#savetask').click(function () {
     condition = getQueryString('q');
     plugin = $('#field-plugin').val().join(",");
     plan = $('#field-plan').val();
+    <!-- add @ 2017_02_13-->
+    report = $('#field-report').val();
+<!-- add end -->
     isupdate = $('#field-isupdate').val() == "" ? "0" : $('#field-isupdate').val();
     resultcheck = $('#resultcheck').prop('checked')
     var ids = [];
@@ -98,7 +101,9 @@ $('#savetask').click(function () {
         ids: ids,
         plan: plan,
         isupdate: isupdate,
-        resultcheck: resultcheck
+        resultcheck: resultcheck,
+<!--add @ 2017_02_13 -->
+        report: report
     }, function (e) {
         if (e == 'success') {
             swal("新增成功", '', "success");
