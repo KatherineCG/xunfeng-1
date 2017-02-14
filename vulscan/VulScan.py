@@ -1,9 +1,12 @@
 # coding:utf-8
 import urllib2
+import urllib
 import thread
 import time
 import pymongo
 import sys
+reload(sys)
+sys.setdefaultencoding('utf-8')
 import datetime
 import hashlib
 import json
@@ -32,10 +35,11 @@ TASK_DATE_DIC = {}
 WHITE_LIST = []
 
 class vulscan():
-    def __init__(self, task_id, task_netloc, task_plugin):
+    def __init__(self, task_id, task_netloc, task_plugin, task_report):
         self.task_id = task_id
         self.task_netloc = task_netloc
         self.task_plugin = task_plugin
+        self.task_report = task_report
         self.result_info = ''
         self.start()
 
@@ -117,29 +121,33 @@ class vulscan():
             # print poc['analyzingdata'].encode("utf-8")
             if analyzingdata.encode("utf-8") in res_html: self.result_info = vul_tag
         elif an_type == 'regex':
-            if re.search(analyzingdata, res_html, re.I): self.result_info = vul_tag
+            if re.search(analyzingdata, res_html, re.I): self.result_info = vul_tag  #re.I 忽略大小写
         elif an_type == 'md5':
             md5 = hashlib.md5()
             md5.update(res_html)
-            if md5.hexdigest() == analyzingdata: self.request_info = vul_tag
+            if md5.hexdigest() == analyzingdata: self.request_info = vul_tag   #md5.hexdigest()得到md5值
 
     def save_request(self):
         if self.result_info:
             try:
                 time_ = datetime.datetime.now()
                 self.log(str(self.task_netloc) + " " + self.result_info)
-                v_count = na_result.find(
-                    {"ip": self.task_netloc[0], "port": self.task_netloc[1], "info": self.result_info}).count()
-                if not v_count: na_plugin.update({"name": self.task_plugin}, {"$inc": {'count': 1}})
                 vulinfo = {"vul_name": self.plugin_info['name'], "vul_level": self.plugin_info['level'],
                            "vul_type": self.plugin_info['type']}
                 w_vul = {"task_id": self.task_id, "ip": self.task_netloc[0], "port": self.task_netloc[1],
                          "vul_info": vulinfo, "info": self.result_info, "time": time_,
                          "task_date": TASK_DATE_DIC[str(self.task_id)]}
+                
                 na_result.insert(w_vul)
-                # self.wx_send(w_vul)  # 自行定义漏洞提醒
+                na_plugin.update({"name": self.task_plugin}, {"$inc": {'count': 1}})
+                if self.task_report == 1:    
+                    self.pull_report()  # 自行定义漏洞提醒
             except Exception, e:
+                print e
                 pass
+
+    def pull_report(self):     #漏洞提交函数入口
+        self.log("开始提交")
 
     def log(self, info):
         lock.acquire()
@@ -153,22 +161,22 @@ class vulscan():
 
 def queue_get():
     global TASK_DATE_DIC
-    task_req = na_task.find_and_modify(query={"status": 0, "plan": 0}, update={"$set": {"status": 1}}, sort={'time': 1})
+    task_req = na_task.find_and_modify(query={"status": 0, "plan": 0}, update={"$set": {"status": 1}}, sort={'time': 1})   #Update and return an object
     if task_req:
         TASK_DATE_DIC[str(task_req['_id'])] = datetime.datetime.now()
-        return task_req['_id'], task_req['plan'], task_req['target'], task_req['plugin']
+        return task_req['_id'], task_req['plan'], task_req['target'], task_req['plugin'], task_req['isreport']
     else:
         task_req_row = na_task.find({"plan": {"$ne": 0}})
         if task_req_row:
             for task_req in task_req_row:
-                if (datetime.datetime.now() - task_req['time']).days / int(task_req['plan']) >= int(task_req['status']):
+                if (datetime.datetime.now() - task_req['time']).days / int(task_req['plan']) >= int(task_req['status']):   #status字段执行完一天+1
                     if task_req['isupdate'] == 1:
                         task_req['target'] = update_target(json.loads(task_req['query']))
                         na_task.update({"_id": task_req['_id']}, {"$set": {"target": task_req['target']}})
                     na_task.update({"_id": task_req['_id']}, {"$inc": {"status": 1}})
                     TASK_DATE_DIC[str(task_req['_id'])] = datetime.datetime.now()
-                    return task_req['_id'], task_req['plan'], task_req['target'], task_req['plugin']
-        return '', '', '', ''
+                    return task_req['_id'], task_req['plan'], task_req['target'], task_req['plugin'], task_req['isreport']
+        return '', '', '', '',''
 
 
 def update_target(query):
@@ -183,7 +191,7 @@ def update_target(query):
     return target_list
 
 
-def monitor():
+def monitor():                        #监控进程，每隔一段时间读取数据库，看是否有任务正在执行，有在执行，load=1,否则load=0
     global PASSWORD_DIC, THREAD_COUNT, TIMEOUT, WHITE_LIST
     while True:
         queue_count = na_task.find({"status": 0, "plan": 0}).count()
@@ -204,7 +212,7 @@ def monitor():
 
 def get_config():
     try:
-        config_info = na_config.find_one({"type": "vulscan"})
+        config_info = na_config.find_one({"type": "vulscan"})    #返回查询的第一个记录
         pass_row = config_info['config']['Password_dic']
         thread_row = config_info['config']['Thread']
         timeout_row = config_info['config']['Timeout']
@@ -249,7 +257,7 @@ def init():
             plugin_info['add_time'] = time_
             plugin_info['filename'] = plugin_name
             plugin_info['count'] = 0
-            del plugin_info['plugin']
+            del plugin_info['plugin']       #del 函数用于列表操作
             na_plugin.insert(plugin_info)
         except:
             pass
@@ -260,8 +268,9 @@ if __name__ == '__main__':
     PASSWORD_DIC, THREAD_COUNT, TIMEOUT, WHITE_LIST = get_config()
     thread.start_new_thread(monitor, ())
     while True:
-        task_id, task_plan, task_target, task_plugin = queue_get()
+        task_id, task_plan, task_target, task_plugin, task_report = queue_get()
         if task_id == '':
+            print "no task"
             time.sleep(10)
             continue
         PLUGIN_DB = {}  # 清理插件缓存
@@ -269,7 +278,7 @@ if __name__ == '__main__':
             while True:
                 if int(thread._count()) < THREAD_COUNT:
                     if task_netloc[0] in WHITE_LIST: break
-                    thread.start_new_thread(vulscan, (task_id, task_netloc, task_plugin))
+                    thread.start_new_thread(vulscan, (task_id, task_netloc, task_plugin, task_report))
                     break
                 else:
                     time.sleep(2)
