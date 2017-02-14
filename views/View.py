@@ -12,7 +12,7 @@ from lib.Login import logincheck
 from lib.AntiCSRF import anticsrf
 from lib.QueryLogic import querylogic
 from werkzeug.utils import secure_filename
-from . import app, Mongo, page_size, file_path
+from . import app, Mongo, page_size, file_path      # from . 就是在当前程序所在文件夹里__init__.py程序中导入XXX
 
 
 # 搜索页
@@ -75,6 +75,7 @@ def Addtask():
     ids = request.form.get('ids', '')
     isupdate = request.form.get('isupdate', '0')
     resultcheck = request.form.get('resultcheck', '0')
+    isreport = request.form.get('report', '1')
     result = 'fail'
     if plugin:
         targets = []
@@ -93,7 +94,7 @@ def Addtask():
         for p in plugin.split(','):
             query = querylogic(condition.strip().split(';'))
             item = {'status': 0, 'title': title, 'plugin': p, 'condition': condition, 'time': datetime.now(),
-                    'target': targets, 'plan': int(plan), 'isupdate': int(isupdate), 'query': dumps(query)}
+                    'target': targets, 'plan': int(plan), 'isupdate': int(isupdate), 'isreport': int(isreport),'query': dumps(query)}
             insert_reuslt = Mongo.coll['Task'].insert(item)
             if not insert_reuslt:
                 temp_result = False
@@ -270,7 +271,7 @@ def DownloadXls():
 @app.route('/plugin')
 @logincheck
 def Plugin():
-    page = int(request.args.get('page', '1'))
+    page = int(request.form.get('page', '1'))
     cursor = Mongo.coll['Plugin'].find().limit(page_size).skip((page - 1) * page_size)
     return render_template('plugin.html', cursor=cursor, vultype=cursor.distinct('type'), count=cursor.count())
 
@@ -450,24 +451,23 @@ def UpdateConfig():
 @anticsrf
 def PullUpdate():
     rsp = 'err'
-    f = urlopen('https://sec.ly.com/xunfeng/getlist')
+    now = datetime.now()
+    f = urlopen('https://sec-pic-ly.b0.upaiyun.com/xunfeng/list.json?time=' + str(now))
     j = f.read().strip()
     if j:
         try:
             remotelist = json.loads(j)
-            plugin = Mongo.coll['Plugin'].find({'source': 1})
-            for p in plugin:
-                for remote in remotelist:
-                    if p['name'] == remote['name'] and remote['coverage'] == 0:
-                        remotelist.remove(remote)
-            locallist = Mongo.coll['Update'].aggregate([{'$project': {'_id': 0, 'unicode': 1}}])
-            local = []
-            for i in locallist:
-                local.append(i['unicode'])
-            ret = [i for i in remotelist if i['unicode'] not in local]
-            for i in ret:
-                i['isInstall'] = 0
-                Mongo.coll['Update'].insert(i)
+            remotelist.sort(lambda x, y: cmp(x['unicode'], y['unicode']), reverse=True)
+            locallastest = Mongo.coll['Update'].find().sort('unicode', -1)
+            local = None
+            if locallastest.count() != 0:
+                local = locallastest.next()
+            for remote in remotelist:
+                if local is None or remote['unicode'] != local['unicode']:
+                    remote['isInstall'] = 0
+                    Mongo.coll['Update'].insert(remote)
+                else:
+                    break
             rsp = 'true'
         except:
             pass
@@ -500,14 +500,9 @@ def installplugin():
     if os.path.exists(file_path + file_name):
         db_record = Mongo.coll['Plugin'].find_one({'filename': file_name.split('.')[0]})
         if not db_record or not db_record['source'] == 1:
-            file_name = file_name.split('.')[0] + '_' + str(datetime.now().second) + '.' + \
+            file_name = file_name.split('.')[0] + '_' + str(datetime.now().second)+ '.' + \
                         file_name.split('.')[-1]
-        else:
-            db_record = Mongo.coll['Plugin'].delete_one({'filename': file_name.split('.')[0]})
-    if item['location'].find('/') == -1:
-        urlretrieve('https://sec.ly.com/xunfeng/getplugin?name=' + item['location'], file_path + file_name)
-    else:
-        urlretrieve(item['location'], file_path + file_name)  # 兼容旧的插件源
+    urlretrieve(item['location'], file_path + file_name)
     if os.path.exists(file_path + file_name):
         try:
             if file_name.split('.')[-1] == 'py':
